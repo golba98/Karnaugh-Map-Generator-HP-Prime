@@ -1,0 +1,191 @@
+SplitCSV(str)
+BEGIN
+  LOCAL out:={}, sub, pos, sep;
+  str := STRING(str);
+  str := REPLACE(str,"{",""); str := REPLACE(str,"}","");
+  str := REPLACE(str,"\"","");
+  IF INSTRING(str, ",") > 0 THEN sep := ",";
+  ELSE
+    IF INSTRING(str, ";") > 0 THEN sep := ";";
+    ELSE sep := " ";
+    END;
+  END;
+  WHILE SIZE(str)>0 DO
+    pos := INSTRING(str, sep);
+    IF pos==0 THEN sub := str; str := "";
+    ELSE sub := LEFT(str,pos-1); str := MID(str,pos+1);
+    END;
+    WHILE SIZE(sub)>0 AND LEFT(sub,1)==" " DO sub := MID(sub,2); END;
+    WHILE SIZE(sub)>0 AND RIGHT(sub,1)==" " DO sub := LEFT(sub,SIZE(sub)-1); END;
+    IF sub<>"" THEN out := CONCAT(out,{UPPER(sub)}); END;
+  END;
+  RETURN out;
+END;
+
+EXPORT KMAP()
+BEGIN
+  LOCAL raw_func:="X+Y*Z", raw_vars:="X,Y,Z";
+  LOCAL Vars, SortVars, tmp, clean_func;
+  LOCAL num_vars, k, j, run_str, val;
+  LOCAL gray := {0,1,3,2};
+  LOCAL col_order, row_order;
+  LOCAL header_col_vars, header_row_vars, col_labels, row_labels;
+  LOCAL sep_line, line, row_bits, col_bits;
+  LOCAL idx, slice, num_slices;
+
+  WHILE 1 DO
+    IF INPUT({{raw_func,[2]}, {raw_vars,[2]}},
+             "K-Map Terminal",
+             {"Function:", "Variables:"},
+             {"Ex: X+Y*Z", "Ex: X,Y,Z"}) == 0 THEN
+      RETURN;
+    END;
+
+    Vars := SplitCSV(raw_vars);
+    num_vars := SIZE(Vars);
+    IF num_vars < 2 OR num_vars > 5 THEN
+      MSGBOX("Use 2..5 variables.");
+      CONTINUE;
+    END;
+
+    // Sort vars by length for safe replacement
+    SortVars := Vars;
+    IF num_vars > 1 THEN
+      FOR k FROM 1 TO num_vars-1 DO
+        FOR j FROM 1 TO num_vars-k DO
+          IF SIZE(SortVars(j)) < SIZE(SortVars(j+1)) THEN
+            tmp := SortVars(j); SortVars(j) := SortVars(j+1); SortVars(j+1) := tmp;
+          END;
+        END;
+      END;
+    END;
+
+    // Prepare expression
+    clean_func := UPPER(raw_func);
+    clean_func := REPLACE(clean_func, " ", "");
+    clean_func := REPLACE(clean_func, "\"", "");
+    FOR j FROM 1 TO num_vars DO
+      clean_func := REPLACE(clean_func, SortVars(j)+"'", "(1-"+SortVars(j)+")");
+    END;
+    clean_func := REPLACE(clean_func, ")(", ")*(");
+
+    // Determine row/column/slice mapping and labels
+    IF num_vars == 2 THEN
+      header_row_vars := Vars(1);
+      header_col_vars := Vars(2);
+      row_order := {0,1};
+      col_order := {0,1};
+    ELSE
+      IF num_vars == 3 THEN
+        header_row_vars := Vars(1);
+        header_col_vars := Vars(2)+Vars(3);
+        row_order := {0,1};
+        col_order := {gray(1),gray(2),gray(3),gray(4)};
+      ELSE
+        IF num_vars == 4 THEN
+          header_row_vars := Vars(1)+Vars(2);
+          header_col_vars := Vars(3)+Vars(4);
+          row_order := {gray(1),gray(2),gray(3),gray(4)};
+          col_order := {gray(1),gray(2),gray(3),gray(4)};
+        ELSE // 5 vars
+          header_row_vars := Vars(2)+Vars(3);
+          header_col_vars := Vars(4)+Vars(5);
+          row_order := {gray(1),gray(2),gray(3),gray(4)};
+          col_order := {gray(1),gray(2),gray(3),gray(4)};
+        END;
+      END;
+    END;
+
+    // Build header parts
+    col_labels := "";
+    FOR k FROM 1 TO SIZE(col_order) DO
+      IF SIZE(col_order) == 2 THEN // 2-var
+        col_labels := col_labels + " " + STRING(col_order(k));
+      ELSE
+        col_labels := col_labels + " " + STRING(IP(col_order(k)/2)MOD 2) + STRING(col_order(k)MOD 2);
+      END;
+    END;
+
+    row_labels := {};
+    FOR k FROM 1 TO SIZE(row_order) DO
+      IF SIZE(row_order) == 2 THEN // 2 or 3-var
+        row_labels(k) := STRING(row_order(k));
+      ELSE
+        row_labels(k) := STRING(IP(row_order(k)/2)MOD 2) + STRING(row_order(k)MOD 2);
+      END;
+    END;
+
+    PRINT();
+    PRINT("Logic: " + UPPER(raw_func));
+    PRINT(" ");
+
+    // --- SYNTAX FIX IS HERE ---
+    // The loop limit must be determined *before* the loop starts.
+    IF num_vars == 5 THEN
+      num_slices := 1;
+    ELSE
+      num_slices := 0;
+    END;
+
+    FOR slice FROM 0 TO num_slices DO
+      IF num_vars == 5 THEN
+        PRINT(Vars(1) + " = " + slice);
+      END;
+
+      // Print headers
+      PRINT("      " + header_col_vars);
+      PRINT("   " + header_row_vars + " |" + col_labels);
+      sep_line := "----+";
+      FOR k FROM 1 TO SIZE(col_labels) DO sep_line := sep_line + "-"; END;
+      PRINT(sep_line);
+
+      // Print data rows
+      FOR idx FROM 1 TO SIZE(row_order) DO
+        line := " " + row_labels(idx) + " |";
+        row_bits := row_order(idx);
+
+        FOR k FROM 1 TO SIZE(col_order) DO
+          col_bits := col_order(k);
+          run_str := clean_func;
+
+          // Substitute bits into expression based on var count
+          IF num_vars == 2 THEN
+            run_str := REPLACE(run_str,SortVars(1),"("+STRING(row_bits)+")");
+            run_str := REPLACE(run_str,SortVars(2),"("+STRING(col_bits)+")");
+          ELSE
+            IF num_vars == 3 THEN
+              run_str := REPLACE(run_str,SortVars(1),"("+STRING(row_bits)+")");
+              run_str := REPLACE(run_str,SortVars(2),"("+STRING(IP(col_bits/2)MOD 2)+")");
+              run_str := REPLACE(run_str,SortVars(3),"("+STRING(col_bits MOD 2)+")");
+            ELSE
+              IF num_vars == 4 THEN
+                run_str := REPLACE(run_str,SortVars(1),"("+STRING(IP(row_bits/2)MOD 2)+")");
+                run_str := REPLACE(run_str,SortVars(2),"("+STRING(row_bits MOD 2)+")");
+                run_str := REPLACE(run_str,SortVars(3),"("+STRING(IP(col_bits/2)MOD 2)+")");
+                run_str := REPLACE(run_str,SortVars(4),"("+STRING(col_bits MOD 2)+")");
+              ELSE // 5 vars
+                run_str := REPLACE(run_str,SortVars(1),"("+STRING(slice)+")");
+                run_str := REPLACE(run_str,SortVars(2),"("+STRING(IP(row_bits/2)MOD 2)+")");
+                run_str := REPLACE(run_str,SortVars(3),"("+STRING(row_bits MOD 2)+")");
+                run_str := REPLACE(run_str,SortVars(4),"("+STRING(IP(col_bits/2)MOD 2)+")");
+                run_str := REPLACE(run_str,SortVars(5),"("+STRING(col_bits MOD 2)+")");
+              END;
+            END;
+          END;
+
+          run_str := REPLACE(run_str, ")(", ")*(");
+          IFERR val := EXPR(run_str); THEN val := -1; END; // Use -1 to show errors
+          IF val > 0 THEN val := 1; ELSE IF val<0 THEN val:=-1; ELSE val:=0; END; END;
+
+          // Add padding for alignment
+          IF SIZE(col_order) == 2 THEN line := line + " " + val;
+          ELSE line := line + "  " + val;
+          END;
+        END;
+        PRINT(line);
+      END;
+      PRINT(" "); // Spacer after map/slice
+    END;
+    WAIT(0);
+  END;
+END;
